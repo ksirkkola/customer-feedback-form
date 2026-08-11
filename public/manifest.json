@@ -1,0 +1,9 @@
+{
+  "author": "Thermetrics",
+  "appId": "6a75d2607163b2968df441c2",
+  "version": "1.0.0",
+  "versionDescription": "Customer feedback form for TRIPS/IHS service visits",
+  "config": {
+    "fields": {}
+  }
+}
