@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert, AlertDescription, AlertIcon, AlertTitle, Box, Button, Container, Divider,
   FormControl, FormErrorMessage, FormLabel, Heading, Input, Radio, RadioGroup,
-  Spinner, Stack, Text, Textarea, VStack,
+  Stack, Text, Textarea, VStack,
 } from '@chakra-ui/react';
 
 const HAILER_API     = 'https://api.hailer.com';
@@ -26,66 +26,6 @@ const F_QUALITY   = '6a75d1ae6b5a2cae994e86cc';
 const F_TECH      = '6a75d1ae6b5a2cae994e86cf';
 const F_RECOMMEND = '6a75d1ae6b5a2cae994e86d2';
 const F_COMMENTS  = '6a75d1ae6b5a2cae994e86d5';
-
-// Trips IHS fields — read-only, used to resolve who the feedback request is for.
-// Both already exist on TRIPS/IHS specifically for this: "Client Contact Person"
-// links to the real Contact Persons record (name + email); "Client Contact Email"
-// is the documented fallback when no contact person is on file.
-const TRIP_WORKFLOW_ID = '6a211715b129621437c16b03';
-const TRIP_CONTACT_PERSON = '6a799e8aef5cbedbd85d3631';
-const TRIP_CONTACT_EMAIL  = '6a75d1557163b2968df43e2f';
-// v3 has no "get one activity by id" endpoint — only activity.list scoped to a
-// known phase. Trips can be in any of these, so we check each in turn until found.
-const TRIP_PHASE_IDS = [
-  '6a211716b129621437c16b0e', // Triage from Support Tickets
-  '6a211716b129621437c16b0f', // Pre-travel Activities
-  '6a211716b129621437c16b10', // Closed
-  '6a211716b129621437c16b11', // In Progress
-  '6a211716b129621437c16b12', // Follow-up Activities
-  '6a211716b129621437c16b13', // Waiting on PO
-  '6a211716b129621437c16b14', // Waiting on Dates
-];
-
-// Contact Persons fields — single-phase workflow, no iteration needed.
-const CONTACT_WORKFLOW_ID = '6a041d0ffc4db70b8339c89a';
-const CONTACT_PHASE_ID    = '6a041d0ffc4db70b8339c8e5';
-const CONTACT_FIRST_NAME  = '6a041d0ffc4db70b8339c8e0';
-const CONTACT_LAST_NAME   = '6a041d0ffc4db70b8339c8e1';
-const CONTACT_EMAIL       = '6a041d0ffc4db70b8339c8c5';
-
-interface RawActivity {
-  _id: string;
-  name?: string;
-  fields?: Record<string, unknown>;
-}
-
-/**
- * v3's HTTP convention is POST <op-in-path> with args as a JSON array body —
- * NOT GET with the id appended to the path (that silently 404s/permission-denies,
- * since the server tries to parse the id as part of the method name). There's also
- * no "get one activity by id" endpoint at all in v3 — only activity.list, scoped to
- * a known processId + phaseId. This searches each candidate phase in turn.
- */
-async function findActivityById(workflowId: string, phaseIds: string[], activityId: string): Promise<RawActivity | null> {
-  for (const phaseId of phaseIds) {
-    try {
-      const res = await fetch(`${HAILER_API}/api/v3/activity/list`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', hlrkey: API_KEY },
-        body: JSON.stringify([
-          { processId: workflowId, phaseId },
-          { limit: 200, includeUsers: false, includeTeams: false, includeActivityLinks: false },
-        ]),
-      });
-      const data = await res.json();
-      const found = (data?.activities as RawActivity[] | undefined)?.find(a => a._id === activityId);
-      if (found) return found;
-    } catch {
-      // try the next phase
-    }
-  }
-  return null;
-}
 
 const SATISFACTION_OPTIONS = [
   { value: '1 - Very Dissatisfied', label: '1 — Very Dissatisfied' },
@@ -130,32 +70,11 @@ function validate(data: FormData, email: string): Errors {
   return errors;
 }
 
-/** Activity-link field values come back as either a raw id string or { value: { _id } }
- *  depending on the endpoint — handle both rather than assuming one shape. */
-function extractLinkId(raw: unknown): string | undefined {
-  if (!raw) return undefined;
-  if (typeof raw === 'string') return raw;
-  const obj = raw as { value?: { _id?: string } | string; _id?: string };
-  if (typeof obj.value === 'string') return obj.value;
-  if (obj.value && typeof obj.value === 'object' && obj.value._id) return obj.value._id;
-  if (obj._id) return obj._id;
-  return undefined;
-}
-
-function extractFieldValue(raw: unknown): string | undefined {
-  if (!raw) return undefined;
-  if (typeof raw === 'string') return raw;
-  const obj = raw as { value?: unknown };
-  if (typeof obj.value === 'string') return obj.value;
-  return undefined;
-}
-
 export default function App() {
   const [tripId, setTripId]           = useState('');
   const [ticketCode, setTicketCode]   = useState('');
   const [engineerId, setEngineerId]   = useState('');
   const [tripName, setTripName]       = useState('');
-  const [loadingTrip, setLoadingTrip] = useState(false);
   const [tripError, setTripError]     = useState(false);
   const [clientName, setClientName]   = useState('');
   const [clientEmail, setClientEmail] = useState('');
@@ -164,45 +83,36 @@ export default function App() {
   const [status, setStatus]           = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg]       = useState('');
 
-  // This form only makes sense tied to a specific service visit — it's what lets us
-  // resolve who to thank/follow up with (via the Trip's linked Contact Person) and
-  // what the feedback is actually about. No trip reference = invalid link, not a
-  // degraded-but-usable generic form.
+  // This form only makes sense tied to a specific service visit, and the browser
+  // can't call Hailer's API directly to look that trip up — api.hailer.com's CORS
+  // policy only allows requests from Hailer's own domains, not GitHub Pages (or
+  // any other external host). So instead of fetching the trip/contact here, Zapier
+  // resolves all of this server-side (where CORS doesn't apply) before it ever
+  // sends the email, and bakes the result straight into the link's query params.
+  // This component just reads them.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const trip = params.get('trip') || '';
     const ticket = params.get('ticket') || '';
     const engineer = params.get('engineer') || '';
+    const name = params.get('name') || '';
+    const email = params.get('email') || '';
+    const trip_name = params.get('tripName') || '';
     setTripId(trip);
     setTicketCode(ticket);
     setEngineerId(engineer);
+    setClientName(name);
+    setClientEmail(email);
+    setTripName(trip_name);
 
-    if (!trip) { setTripError(true); return; }
-
-    setLoadingTrip(true);
-    (async () => {
-      const tripActivity = await findActivityById(TRIP_WORKFLOW_ID, TRIP_PHASE_IDS, trip);
-      if (!tripActivity) { setTripError(true); setLoadingTrip(false); return; }
-      if (tripActivity.name) setTripName(tripActivity.name);
-
-      const contactPersonId = extractLinkId(tripActivity.fields?.[TRIP_CONTACT_PERSON]);
-      const fallbackEmail = extractFieldValue(tripActivity.fields?.[TRIP_CONTACT_EMAIL]);
-
-      if (contactPersonId) {
-        const cp = await findActivityById(CONTACT_WORKFLOW_ID, [CONTACT_PHASE_ID], contactPersonId);
-        const first = extractFieldValue(cp?.fields?.[CONTACT_FIRST_NAME]) || '';
-        const last = extractFieldValue(cp?.fields?.[CONTACT_LAST_NAME]) || '';
-        const email = extractFieldValue(cp?.fields?.[CONTACT_EMAIL]) || '';
-        setClientName(`${first} ${last}`.trim() || cp?.name || '');
-        setClientEmail(email || fallbackEmail || '');
-      } else if (fallbackEmail) {
-        setClientEmail(fallbackEmail);
-      }
-
-      setLoadingTrip(false);
-    })();
+    if (!trip) { setTripError(true); }
   }, []);
 
+  // TODO: this still POSTs directly to api.hailer.com, which hits the exact same CORS
+  // wall as the old trip-lookup code did — it will fail for a real customer in a real
+  // browser. Needs to be swapped to POST to a Zapier "Catch Hook" webhook instead (Zap
+  // #2), which creates the activity server-side where CORS doesn't apply. Not yet done
+  // because that Zap doesn't exist yet. Submitting will not work end-to-end until then.
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const errs = validate(form, clientEmail);
@@ -292,9 +202,7 @@ export default function App() {
       <Container maxW="lg">
         <Box textAlign="center" mb={8}>
           <Heading size="md" color="white">Thermetrics Europe Service Feedback</Heading>
-          {loadingTrip ? (
-            <Spinner size="sm" color="gray.400" mt={3} />
-          ) : tripName ? (
+          {tripName ? (
             <Box mt={3} p={3} bg="gray.900" borderRadius="md" border="1px" borderColor="gray.700">
               <Text color="gray.400" fontSize="xs" mb={1}>You are rating the following service visit:</Text>
               <Text color="white" fontWeight="semibold">{tripName}</Text>
