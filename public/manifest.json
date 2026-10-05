@@ -1,8 +1,8 @@
 {
   "author": "Thermetrics",
   "appId": "6a75d2607163b2968df441c2",
-  "version": "1.1.0",
-  "versionDescription": "Fixed a bug where every submission landed in 'Pending' instead of 'Received', silently skipping the already-configured team announcement for new feedback. The form now also requires a trip reference (invalid-link screen if missing) and auto-fills the submitter's name/email from the Trip's linked Client Contact Person (falling back to Client Contact Email, then a manual field) instead of leaving every submission anonymous \u2014 critical for following up on a bad review and for the planned auto-send feature, which needs a real email address to send to.",
+  "version": "1.2.0",
+  "versionDescription": "Fixed the Trip/Contact auto-fill from v1.1.0, which never actually worked: it called a GET endpoint with the id appended to the path, but v3 has no such route (nor any 'get one activity by id' endpoint at all) \u2014 switched to the real convention (POST, operator in the path, args as a JSON array body) and v3.activity.list scoped across Trips IHS's phases. Verified end-to-end against a real trip. Also rotated the embedded API key: the previous value was a raw login session token (not a real User API Key) that had been committed in this public repo \u2014 replaced with a properly-issued, named key ('Customer Feedback Form (public)').",
   "config": {
     "fields": {}
   }

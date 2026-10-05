@@ -31,13 +31,61 @@ const F_COMMENTS  = '6a75d1ae6b5a2cae994e86d5';
 // Both already exist on TRIPS/IHS specifically for this: "Client Contact Person"
 // links to the real Contact Persons record (name + email); "Client Contact Email"
 // is the documented fallback when no contact person is on file.
+const TRIP_WORKFLOW_ID = '6a211715b129621437c16b03';
 const TRIP_CONTACT_PERSON = '6a799e8aef5cbedbd85d3631';
 const TRIP_CONTACT_EMAIL  = '6a75d1557163b2968df43e2f';
+// v3 has no "get one activity by id" endpoint — only activity.list scoped to a
+// known phase. Trips can be in any of these, so we check each in turn until found.
+const TRIP_PHASE_IDS = [
+  '6a211716b129621437c16b0e', // Triage from Support Tickets
+  '6a211716b129621437c16b0f', // Pre-travel Activities
+  '6a211716b129621437c16b10', // Closed
+  '6a211716b129621437c16b11', // In Progress
+  '6a211716b129621437c16b12', // Follow-up Activities
+  '6a211716b129621437c16b13', // Waiting on PO
+  '6a211716b129621437c16b14', // Waiting on Dates
+];
 
-// Contact Persons fields
-const CONTACT_FIRST_NAME = '6a041d0ffc4db70b8339c8e0';
-const CONTACT_LAST_NAME  = '6a041d0ffc4db70b8339c8e1';
-const CONTACT_EMAIL      = '6a041d0ffc4db70b8339c8c5';
+// Contact Persons fields — single-phase workflow, no iteration needed.
+const CONTACT_WORKFLOW_ID = '6a041d0ffc4db70b8339c89a';
+const CONTACT_PHASE_ID    = '6a041d0ffc4db70b8339c8e5';
+const CONTACT_FIRST_NAME  = '6a041d0ffc4db70b8339c8e0';
+const CONTACT_LAST_NAME   = '6a041d0ffc4db70b8339c8e1';
+const CONTACT_EMAIL       = '6a041d0ffc4db70b8339c8c5';
+
+interface RawActivity {
+  _id: string;
+  name?: string;
+  fields?: Record<string, unknown>;
+}
+
+/**
+ * v3's HTTP convention is POST <op-in-path> with args as a JSON array body —
+ * NOT GET with the id appended to the path (that silently 404s/permission-denies,
+ * since the server tries to parse the id as part of the method name). There's also
+ * no "get one activity by id" endpoint at all in v3 — only activity.list, scoped to
+ * a known processId + phaseId. This searches each candidate phase in turn.
+ */
+async function findActivityById(workflowId: string, phaseIds: string[], activityId: string): Promise<RawActivity | null> {
+  for (const phaseId of phaseIds) {
+    try {
+      const res = await fetch(`${HAILER_API}/api/v3/activity/list`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', hlrkey: API_KEY },
+        body: JSON.stringify([
+          { processId: workflowId, phaseId },
+          { limit: 200, includeUsers: false, includeTeams: false, includeActivityLinks: false },
+        ]),
+      });
+      const data = await res.json();
+      const found = (data?.activities as RawActivity[] | undefined)?.find(a => a._id === activityId);
+      if (found) return found;
+    } catch {
+      // try the next phase
+    }
+  }
+  return null;
+}
 
 const SATISFACTION_OPTIONS = [
   { value: '1 - Very Dissatisfied', label: '1 — Very Dissatisfied' },
@@ -132,34 +180,27 @@ export default function App() {
     if (!trip) { setTripError(true); return; }
 
     setLoadingTrip(true);
-    fetch(`${HAILER_API}/api/v3/activity/get/${trip}`, { headers: { hlrkey: API_KEY } })
-      .then(r => r.json())
-      .then(async data => {
-        if (!data || !data._id) { setTripError(true); setLoadingTrip(false); return; }
-        if (data.name) setTripName(data.name);
+    (async () => {
+      const tripActivity = await findActivityById(TRIP_WORKFLOW_ID, TRIP_PHASE_IDS, trip);
+      if (!tripActivity) { setTripError(true); setLoadingTrip(false); return; }
+      if (tripActivity.name) setTripName(tripActivity.name);
 
-        const contactPersonId = extractLinkId(data.fields?.[TRIP_CONTACT_PERSON]);
-        const fallbackEmail = extractFieldValue(data.fields?.[TRIP_CONTACT_EMAIL]);
+      const contactPersonId = extractLinkId(tripActivity.fields?.[TRIP_CONTACT_PERSON]);
+      const fallbackEmail = extractFieldValue(tripActivity.fields?.[TRIP_CONTACT_EMAIL]);
 
-        if (contactPersonId) {
-          try {
-            const cpRes = await fetch(`${HAILER_API}/api/v3/activity/get/${contactPersonId}`, { headers: { hlrkey: API_KEY } });
-            const cp = await cpRes.json();
-            const first = extractFieldValue(cp?.fields?.[CONTACT_FIRST_NAME]) || '';
-            const last = extractFieldValue(cp?.fields?.[CONTACT_LAST_NAME]) || '';
-            const email = extractFieldValue(cp?.fields?.[CONTACT_EMAIL]) || '';
-            setClientName(`${first} ${last}`.trim() || cp?.name || '');
-            setClientEmail(email || fallbackEmail || '');
-          } catch {
-            setClientEmail(fallbackEmail || '');
-          }
-        } else if (fallbackEmail) {
-          setClientEmail(fallbackEmail);
-        }
+      if (contactPersonId) {
+        const cp = await findActivityById(CONTACT_WORKFLOW_ID, [CONTACT_PHASE_ID], contactPersonId);
+        const first = extractFieldValue(cp?.fields?.[CONTACT_FIRST_NAME]) || '';
+        const last = extractFieldValue(cp?.fields?.[CONTACT_LAST_NAME]) || '';
+        const email = extractFieldValue(cp?.fields?.[CONTACT_EMAIL]) || '';
+        setClientName(`${first} ${last}`.trim() || cp?.name || '');
+        setClientEmail(email || fallbackEmail || '');
+      } else if (fallbackEmail) {
+        setClientEmail(fallbackEmail);
+      }
 
-        setLoadingTrip(false);
-      })
-      .catch(() => { setTripError(true); setLoadingTrip(false); });
+      setLoadingTrip(false);
+    })();
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
