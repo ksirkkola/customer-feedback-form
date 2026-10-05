@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Live API key for the public form's direct REST calls — this repo is public,
+# never commit real credentials here again. Set locally before building/publishing.
+.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
