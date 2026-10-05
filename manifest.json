@@ -1,8 +1,8 @@
 {
   "author": "Thermetrics",
   "appId": "6a75d2607163b2968df441c2",
-  "version": "1.2.1",
-  "versionDescription": "Fixed inconsistent/wrong title text \u2014 the error and thank-you screens said 'Thermetrics Europe Support Request' (leftover from unrelated code), confusingly different from the actual question form's 'Thermetrics Europe Service Feedback'. All three screens now consistently say 'Service Feedback', since this is not a support request form.",
+  "version": "1.3.0",
+  "versionDescription": "Removed the direct browser-to-api.hailer.com trip/contact lookup entirely \u2014 it was hitting the same CORS wall discovered earlier and was failing on every single link, valid or not, which is why every test showed 'Link Not Valid' regardless of the trip id used. Name/email/trip name are now read straight from URL query params instead, matching the new design where Zapier resolves all of that server-side before sending the email. Form submission still POSTs directly to Hailer for now and will hit the same CORS wall for a real customer \u2014 that needs a second Zapier webhook (Zap #2), not yet built.",
   "config": {
     "fields": {}
   }
