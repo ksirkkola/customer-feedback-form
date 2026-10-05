@@ -1,0 +1,9 @@
+{
+  "author": "Thermetrics",
+  "appId": "6a75d2607163b2968df441c2",
+  "version": "1.2.1",
+  "versionDescription": "Fixed inconsistent/wrong title text \u2014 the error and thank-you screens said 'Thermetrics Europe Support Request' (leftover from unrelated code), confusingly different from the actual question form's 'Thermetrics Europe Service Feedback'. All three screens now consistently say 'Service Feedback', since this is not a support request form.",
+  "config": {
+    "fields": {}
+  }
+}
