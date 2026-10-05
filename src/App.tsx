@@ -250,7 +250,7 @@ export default function App() {
     return (
       <Box minH="100vh" bg="black" display="flex" alignItems="center" justifyContent="center" p={6}>
         <Container maxW="md" textAlign="center">
-          <Heading size="md" color="white" mb={8}>Thermetrics Europe Support Request</Heading>
+          <Heading size="md" color="white" mb={8}>Thermetrics Europe Service Feedback</Heading>
           <Alert status="error" borderRadius="lg" flexDirection="column" p={10}
             bg="gray.900" border="1px" borderColor="gray.700">
             <AlertIcon boxSize={12} mb={4} color="red.300" />
@@ -270,7 +270,7 @@ export default function App() {
     return (
       <Box minH="100vh" bg="black" display="flex" alignItems="center" justifyContent="center" p={6}>
         <Container maxW="md" textAlign="center">
-          <Heading size="md" color="white" mb={8}>Thermetrics Europe Support Request</Heading>
+          <Heading size="md" color="white" mb={8}>Thermetrics Europe Service Feedback</Heading>
           <Alert status="success" borderRadius="lg" flexDirection="column" p={10}
             bg="gray.900" border="1px" borderColor="gray.700">
             <AlertIcon boxSize={12} mb={4} color="green.300" />
