@@ -1,16 +1,20 @@
 import { useEffect, useState } from 'react';
 import {
-  Box, Button, Container, Divider, Flex, FormControl, FormErrorMessage,
-  FormLabel, Heading, Radio, RadioGroup, Spinner, Stack, Text,
-  Textarea, VStack, Alert, AlertIcon, AlertTitle, AlertDescription,
+  Alert, AlertDescription, AlertIcon, AlertTitle, Box, Button, Container, Divider,
+  FormControl, FormErrorMessage, FormLabel, Heading, Input, Radio, RadioGroup,
+  Spinner, Stack, Text, Textarea, VStack,
 } from '@chakra-ui/react';
 
-const HAILER_API   = 'https://api.hailer.com';
-const WORKFLOW_ID  = '6a75d152d4a89ea5abc6434e'; // Customer Feedback
-const PHASE_PENDING = '6a75d1a7e4a862ee2e5e30a3';
-const API_KEY      = import.meta.env.VITE_API_KEY || '';
+const HAILER_API     = 'https://api.hailer.com';
+const WORKFLOW_ID    = '6a75d152d4a89ea5abc6434e'; // Customer Feedback
+// "Received" — NOT "Pending". Pending means "form sent, awaiting response"; by the
+// time this component POSTs, the customer has already responded. Received is also
+// the only phase with the team announcement enabled (enableAnnouncement: true) —
+// creating into Pending meant that announcement never fired.
+const PHASE_RECEIVED = '6a75d1aae4a862ee2e5e30c2';
+const API_KEY        = import.meta.env.VITE_API_KEY || '';
 
-// Field IDs
+// Customer Feedback fields
 const F_TRIP      = '6a75d1ad6b5a2cae994e86b4';
 const F_TICKET    = '6a75d1ad6b5a2cae994e86b7';
 const F_NAME      = '6a75d1ad6b5a2cae994e86ba';
@@ -22,6 +26,18 @@ const F_QUALITY   = '6a75d1ae6b5a2cae994e86cc';
 const F_TECH      = '6a75d1ae6b5a2cae994e86cf';
 const F_RECOMMEND = '6a75d1ae6b5a2cae994e86d2';
 const F_COMMENTS  = '6a75d1ae6b5a2cae994e86d5';
+
+// Trips IHS fields — read-only, used to resolve who the feedback request is for.
+// Both already exist on TRIPS/IHS specifically for this: "Client Contact Person"
+// links to the real Contact Persons record (name + email); "Client Contact Email"
+// is the documented fallback when no contact person is on file.
+const TRIP_CONTACT_PERSON = '6a799e8aef5cbedbd85d3631';
+const TRIP_CONTACT_EMAIL  = '6a75d1557163b2968df43e2f';
+
+// Contact Persons fields
+const CONTACT_FIRST_NAME = '6a041d0ffc4db70b8339c8e0';
+const CONTACT_LAST_NAME  = '6a041d0ffc4db70b8339c8e1';
+const CONTACT_EMAIL      = '6a041d0ffc4db70b8339c8c5';
 
 const SATISFACTION_OPTIONS = [
   { value: '1 - Very Dissatisfied', label: '1 — Very Dissatisfied' },
@@ -52,29 +68,58 @@ interface Errors {
   quality?: string;
   professionalism?: string;
   recommend?: string;
+  email?: string;
 }
 
-function validate(data: FormData): Errors {
+function validate(data: FormData, email: string): Errors {
   const errors: Errors = {};
-  if (!data.overall)        errors.overall        = 'Please rate your overall satisfaction';
-  if (!data.quality)        errors.quality        = 'Please rate the quality of service';
+  if (!data.overall)         errors.overall        = 'Please rate your overall satisfaction';
+  if (!data.quality)         errors.quality        = 'Please rate the quality of service';
   if (!data.professionalism) errors.professionalism = 'Please rate technician professionalism';
-  if (!data.recommend)      errors.recommend      = 'Please answer this question';
+  if (!data.recommend)       errors.recommend      = 'Please answer this question';
+  if (!email.trim())         errors.email          = 'Please enter your email address';
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = 'Please enter a valid email address';
   return errors;
 }
 
-export default function App() {
-  const [tripId, setTripId]         = useState('');
-  const [ticketCode, setTicketCode] = useState('');
-  const [engineerId, setEngineerId] = useState('');
-  const [tripName, setTripName]     = useState('');
-  const [loadingTrip, setLoadingTrip] = useState(false);
-  const [form, setForm]             = useState<FormData>({ overall: '', quality: '', professionalism: '', recommend: '', comments: '' });
-  const [errors, setErrors]         = useState<Errors>({});
-  const [status, setStatus]         = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
-  const [errorMsg, setErrorMsg]     = useState('');
+/** Activity-link field values come back as either a raw id string or { value: { _id } }
+ *  depending on the endpoint — handle both rather than assuming one shape. */
+function extractLinkId(raw: unknown): string | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === 'string') return raw;
+  const obj = raw as { value?: { _id?: string } | string; _id?: string };
+  if (typeof obj.value === 'string') return obj.value;
+  if (obj.value && typeof obj.value === 'object' && obj.value._id) return obj.value._id;
+  if (obj._id) return obj._id;
+  return undefined;
+}
 
-  // Read URL params and fetch trip name
+function extractFieldValue(raw: unknown): string | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === 'string') return raw;
+  const obj = raw as { value?: unknown };
+  if (typeof obj.value === 'string') return obj.value;
+  return undefined;
+}
+
+export default function App() {
+  const [tripId, setTripId]           = useState('');
+  const [ticketCode, setTicketCode]   = useState('');
+  const [engineerId, setEngineerId]   = useState('');
+  const [tripName, setTripName]       = useState('');
+  const [loadingTrip, setLoadingTrip] = useState(false);
+  const [tripError, setTripError]     = useState(false);
+  const [clientName, setClientName]   = useState('');
+  const [clientEmail, setClientEmail] = useState('');
+  const [form, setForm]               = useState<FormData>({ overall: '', quality: '', professionalism: '', recommend: '', comments: '' });
+  const [errors, setErrors]           = useState<Errors>({});
+  const [status, setStatus]           = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
+  const [errorMsg, setErrorMsg]       = useState('');
+
+  // This form only makes sense tied to a specific service visit — it's what lets us
+  // resolve who to thank/follow up with (via the Trip's linked Contact Person) and
+  // what the feedback is actually about. No trip reference = invalid link, not a
+  // degraded-but-usable generic form.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const trip = params.get('trip') || '';
@@ -84,24 +129,42 @@ export default function App() {
     setTicketCode(ticket);
     setEngineerId(engineer);
 
-    // Fetch trip name from Hailer
-    if (trip) {
-      setLoadingTrip(true);
-      fetch(`${HAILER_API}/api/v3/activity/get/${trip}`, {
-        headers: { 'hlrkey': API_KEY }
+    if (!trip) { setTripError(true); return; }
+
+    setLoadingTrip(true);
+    fetch(`${HAILER_API}/api/v3/activity/get/${trip}`, { headers: { hlrkey: API_KEY } })
+      .then(r => r.json())
+      .then(async data => {
+        if (!data || !data._id) { setTripError(true); setLoadingTrip(false); return; }
+        if (data.name) setTripName(data.name);
+
+        const contactPersonId = extractLinkId(data.fields?.[TRIP_CONTACT_PERSON]);
+        const fallbackEmail = extractFieldValue(data.fields?.[TRIP_CONTACT_EMAIL]);
+
+        if (contactPersonId) {
+          try {
+            const cpRes = await fetch(`${HAILER_API}/api/v3/activity/get/${contactPersonId}`, { headers: { hlrkey: API_KEY } });
+            const cp = await cpRes.json();
+            const first = extractFieldValue(cp?.fields?.[CONTACT_FIRST_NAME]) || '';
+            const last = extractFieldValue(cp?.fields?.[CONTACT_LAST_NAME]) || '';
+            const email = extractFieldValue(cp?.fields?.[CONTACT_EMAIL]) || '';
+            setClientName(`${first} ${last}`.trim() || cp?.name || '');
+            setClientEmail(email || fallbackEmail || '');
+          } catch {
+            setClientEmail(fallbackEmail || '');
+          }
+        } else if (fallbackEmail) {
+          setClientEmail(fallbackEmail);
+        }
+
+        setLoadingTrip(false);
       })
-        .then(r => r.json())
-        .then(data => {
-          if (data && data.name) setTripName(data.name);
-          setLoadingTrip(false);
-        })
-        .catch(() => setLoadingTrip(false));
-    }
+      .catch(() => { setTripError(true); setLoadingTrip(false); });
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const errs = validate(form);
+    const errs = validate(form, clientEmail);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
     setStatus('submitting');
@@ -109,6 +172,8 @@ export default function App() {
       const now = Math.floor(Date.now() / 1000);
       const fields: Record<string, unknown> = {
         [F_TICKET]:    ticketCode,
+        [F_NAME]:      clientName.trim(),
+        [F_EMAIL]:     clientEmail.trim(),
         [F_DATE]:      now,
         [F_OVERALL]:   form.overall,
         [F_QUALITY]:   form.quality,
@@ -125,8 +190,8 @@ export default function App() {
         body: JSON.stringify([
           WORKFLOW_ID,
           {
-            name: `Feedback — ${ticketCode || 'Service Visit'}`,
-            phaseId: PHASE_PENDING,
+            name: `Feedback — ${tripName || ticketCode || 'Service Visit'} — ${clientName.trim() || 'Unknown'}`,
+            phaseId: PHASE_RECEIVED,
             fields,
           },
         ]),
@@ -138,6 +203,26 @@ export default function App() {
       setErrorMsg(String(err));
       setStatus('error');
     }
+  }
+
+  if (tripError) {
+    return (
+      <Box minH="100vh" bg="black" display="flex" alignItems="center" justifyContent="center" p={6}>
+        <Container maxW="md" textAlign="center">
+          <Heading size="md" color="white" mb={8}>Thermetrics Europe Support Request</Heading>
+          <Alert status="error" borderRadius="lg" flexDirection="column" p={10}
+            bg="gray.900" border="1px" borderColor="gray.700">
+            <AlertIcon boxSize={12} mb={4} color="red.300" />
+            <AlertTitle fontSize="xl" mb={2} color="white">Link Not Valid</AlertTitle>
+            <AlertDescription color="gray.400">
+              This feedback link is missing its service visit reference, or the link has expired.
+              Please use the link provided in your service visit confirmation email, or contact us directly.
+            </AlertDescription>
+          </Alert>
+          <Text color="gray.600" fontSize="xs" mt={5}>© Thermetrics Europe Oy · support.europe@thermetrics.com</Text>
+        </Container>
+      </Box>
+    );
   }
 
   if (status === 'success') {
@@ -193,6 +278,32 @@ export default function App() {
 
           <form onSubmit={handleSubmit}>
             <VStack spacing={6}>
+
+              <FormControl>
+                <FormLabel color="gray.300" fontWeight="semibold">Your Name <Text as="span" color="gray.500" fontWeight="normal">(optional)</Text></FormLabel>
+                <Input
+                  bg="gray.800" border="1px" borderColor="gray.600" color="white"
+                  _placeholder={{ color: 'gray.500' }} _focus={{ borderColor: 'white', boxShadow: 'none' }}
+                  placeholder="Your name"
+                  value={clientName}
+                  onChange={e => setClientName(e.target.value)}
+                />
+              </FormControl>
+
+              <FormControl isInvalid={!!errors.email} isRequired>
+                <FormLabel color="gray.300" fontWeight="semibold">Your Email</FormLabel>
+                <Input
+                  type="email"
+                  bg="gray.800" border="1px" borderColor="gray.600" color="white"
+                  _placeholder={{ color: 'gray.500' }} _focus={{ borderColor: 'white', boxShadow: 'none' }}
+                  placeholder="you@company.com"
+                  value={clientEmail}
+                  onChange={e => { setClientEmail(e.target.value); setErrors(p => ({ ...p, email: undefined })); }}
+                />
+                <FormErrorMessage>{errors.email}</FormErrorMessage>
+              </FormControl>
+
+              <Divider borderColor="gray.700" />
 
               <FormControl isInvalid={!!errors.overall} isRequired>
                 <FormLabel color="gray.300" fontWeight="semibold">Overall Satisfaction</FormLabel>
